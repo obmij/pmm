@@ -2,7 +2,6 @@
  * Page MaMa LINE Official Account Bot - Google Apps Script
  * Required Script Properties:
  * LINE_CHANNEL_ACCESS_TOKEN
- * RICH_MENU_IMAGE_FILE_ID  // Google Drive file ID for rich-menu image PNG/JPEG
  * WEB_URL=https://pmm.jamespan.org
  */
 
@@ -10,6 +9,7 @@ const CFG = {
   brand: 'Page MaMa',
   webUrl: getProp_('WEB_URL', 'https://pmm.jamespan.org'),
   token: getProp_('LINE_CHANNEL_ACCESS_TOKEN'),
+  richMenuImageUrl: 'https://raw.githubusercontent.com/obmij/pmm/main/assets/rich-menu-main.png',
 };
 
 function doPost(e) {
@@ -38,27 +38,53 @@ function handleEvent_(event) {
 }
 
 function setupRichMenu() {
+  if (!CFG.token) {
+    throw new Error('Missing Script Property: LINE_CHANNEL_ACCESS_TOKEN');
+  }
+
   const richMenu = {
-    size: { width: 2500, height: 843 },
+    size: { width: 2500, height: 1686 },
     selected: true,
     name: 'Page MaMa Main Menu',
     chatBarText: 'Page MaMa 選單',
     areas: [
-      area_(0, 0, 625, 843, '網站製作', 'action=website'),
-      area_(625, 0, 625, 843, 'LINE 智慧客服', 'action=line_ai'),
-      area_(1250, 0, 625, 843, '需求估價', 'action=quote'),
-      area_(1875, 0, 625, 843, '服務與支援', 'action=support'),
+      area_(0, 0, 1250, 843, '網站製作', 'action=website'),
+      area_(1250, 0, 1250, 843, 'LINE 智慧客服', 'action=line_ai'),
+      area_(0, 843, 1250, 843, '需求估價', 'action=quote'),
+      area_(1250, 843, 1250, 843, '服務與支援', 'action=support'),
     ],
   };
-  const res = lineFetch_('/v2/bot/richmenu', 'post', richMenu);
-  const richMenuId = JSON.parse(res.getContentText()).richMenuId;
 
-  const fileId = getProp_('RICH_MENU_IMAGE_FILE_ID');
-  const blob = DriveApp.getFileById(fileId).getBlob();
-  uploadRichMenuImage_(richMenuId, blob);
-  lineFetch_(`/v2/bot/user/all/richmenu/${richMenuId}`, 'post');
-  PropertiesService.getScriptProperties().setProperty('RICH_MENU_ID', richMenuId);
-  Logger.log(`Rich menu created: ${richMenuId}`);
+  const createResponse = lineFetch_('/v2/bot/richmenu', 'post', richMenu);
+  const richMenuId = JSON.parse(createResponse.getContentText()).richMenuId;
+
+  try {
+    const imageResponse = UrlFetchApp.fetch(CFG.richMenuImageUrl, {
+      method: 'get',
+      muteHttpExceptions: true,
+      followRedirects: true,
+    });
+
+    if (imageResponse.getResponseCode() !== 200) {
+      throw new Error(
+        `Rich menu image download failed: ${imageResponse.getResponseCode()} ${imageResponse.getContentText()}`
+      );
+    }
+
+    const imageBlob = imageResponse.getBlob().setContentType('image/png');
+    uploadRichMenuImage_(richMenuId, imageBlob);
+    lineFetch_(`/v2/bot/user/all/richmenu/${richMenuId}`, 'post');
+
+    PropertiesService.getScriptProperties().setProperty('RICH_MENU_ID', richMenuId);
+    Logger.log(`Rich menu created and set as default: ${richMenuId}`);
+  } catch (error) {
+    try {
+      lineFetch_(`/v2/bot/richmenu/${richMenuId}`, 'delete');
+    } catch (cleanupError) {
+      Logger.log(`Rich menu cleanup failed: ${cleanupError.message}`);
+    }
+    throw error;
+  }
 }
 
 function area_(x, y, width, height, label, data) {
@@ -187,7 +213,10 @@ function uploadRichMenuImage_(richMenuId, blob) {
     payload: blob.getBytes(),
     headers: { Authorization: `Bearer ${CFG.token}` },
   });
-  if (res.getResponseCode() < 200 || res.getResponseCode() >= 300) throw new Error(res.getContentText());
+  const code = res.getResponseCode();
+  if (code < 200 || code >= 300) {
+    throw new Error(`Rich menu image upload failed: ${code} ${res.getContentText()}`);
+  }
 }
 
 function parseData_(data) {
